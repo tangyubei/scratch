@@ -1,28 +1,43 @@
 from dash import Dash, html, Input, Output
 import dash_bootstrap_components as dbc
-from tree_select.TreeSelect import TreeSelect
+from tree_select.TreeSelect import tree_dropdown
 
-app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+app = Dash(
+    __name__,
+    external_stylesheets=[dbc.themes.BOOTSTRAP],
+    suppress_callback_exceptions=True,
+)
 
-paths = [
-    "A/B/C/D",
-    "A/B/E/F",
-    "X/Y/Z",
+OLD_PATHS = [
+    "ROOT/US/INDEX/SPX",
+    "ROOT/US/INDEX/NDX",
+    "ROOT/US/STOCK/AAPL",
+]
+
+NEW_PATHS = [
+    "ROOT/EU/INDEX/DAX",
+    "ROOT/EU/INDEX/CAC",
+    "ROOT/US/STOCK/MSFT",
+    "ROOT/US/STOCK/GOOGL",
 ]
 
 app.layout = html.Div(
     [
-        TreeSelect(app, id="files", paths=paths),
-        html.Pre(id="out"),
-    ]
+        dbc.Button("UPDATE PATHS", id="update", color="primary", className="mb-3"),
+        tree_dropdown(app, id="tree", paths=OLD_PATHS),
+    ],
+    style={"maxWidth": "600px"},
 )
+
 
 @app.callback(
-    Output("out", "children"),
-    Input({"cmp": "files", "type": "selected"}, "data"),
+    Output({"cmp": "tree", "type": "paths"}, "data"),
+    Input("update", "n_clicks"),
+    prevent_initial_call=True,
 )
-def show(selected):
-    return selected
+def update_paths(_):
+    return NEW_PATHS
+
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, use_reloader=False)
