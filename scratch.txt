@@ -28,8 +28,6 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
                 return {f"{k}/{ck}": v[ck]}
             return {k: v}
 
-        compressed = compress(root)
-
         def to_tree(d, parent=""):
             out = []
             for k, v in d.items():
@@ -41,34 +39,16 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
                 })
             return out
 
-        return to_tree(compressed)
+        return to_tree(compress(root))
 
-    def flatten_tree(nodes):
-        paths, children = [], {}
-
-        def walk(n):
-            paths.append(n["path"])
-            children[n["path"]] = [c["path"] for c in n["children"]]
-            for c in n["children"]:
-                walk(c)
-
-        for n in nodes:
-            walk(n)
-        return paths, children
-
-    def descendants(p):
-        out, stack = [], CHILDREN[p][:]
-        while stack:
-            x = stack.pop()
-            out.append(x)
-            stack.extend(CHILDREN[x])
-        return out
-
+    # --------------------------------------------------------
+    # CHECKBOX
     # --------------------------------------------------------
     def tri_checkbox(path):
         return html.Span(
             id={"cmp": id, "type": "chk", "path": path},
             n_clicks=0,
+            children="",
             style={
                 "width": "16px",
                 "height": "16px",
@@ -78,11 +58,14 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
                 "justifyContent": "center",
                 "cursor": "pointer",
                 "fontWeight": "bold",
-                "userSelect": "none",
                 "marginRight": "6px",
+                "userSelect": "none",
             },
         )
 
+    # --------------------------------------------------------
+    # RENDER NODE
+    # --------------------------------------------------------
     def render_node(node, level=0):
         indent = f"{level * 20}px"
         p = node["path"]
@@ -122,15 +105,14 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
         )
 
     # --------------------------------------------------------
+    # INITIAL TREE
+    # --------------------------------------------------------
     tree = build_tree(paths)
-    ALL_PATHS, CHILDREN = flatten_tree(tree)
 
     layout = html.Div(
         [
-            dcc.Store(
-                id={"cmp": id, "type": "state"},
-                data={p: False for p in ALL_PATHS},
-            ),
+            dcc.Store(id={"cmp": id, "type": "paths"}, data=paths),
+            dcc.Store(id={"cmp": id, "type": "checked"}, data={}),
 
             dbc.Button(
                 button_label,
@@ -140,37 +122,71 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
                 className="mb-2",
             ),
 
-            dbc.Collapse(
-                [
-                    html.Div(
-                        [render_node(n) for n in tree],
-                        style={
-                            "border": "1px solid #ced4da",
-                            "padding": "8px",
-                            "maxHeight": "250px",
-                            "overflowY": "auto",
-                            "background": "white",
-                        },
-                    ),
-
-                    # 👇 SELECTED FILES DISPLAY (ONE PER LINE)
-                    html.Pre(
-                        id={"cmp": id, "type": "display"},
-                        style={
-                            "marginTop": "8px",
-                            "background": "#f8f9fa",
-                            "padding": "6px",
-                            "border": "1px solid #ced4da",
-                            "whiteSpace": "pre-wrap",
-                        },
-                    ),
-                ],
+            dbc.Collapse([
+                html.Div(
+                    [render_node(n) for n in tree],
+                    id={"cmp": id, "type": "tree"},
+                    style={
+                        "border": "1px solid #ced4da",
+                        "padding": "8px",
+                        "maxHeight": "250px",
+                        "overflowY": "auto",
+                        "background": "white",
+                    },
+                ),
+                html.Div(
+                    [
+                        html.Div(
+                            "Checked leaf paths:",
+                            style={"fontWeight": "bold", "marginTop": "8px"},
+                        ),
+                        html.Pre(
+                            id={"cmp": id, "type": "selected"},
+                            style={
+                                "border": "1px solid #ced4da",
+                                "padding": "8px",
+                                "marginTop": "4px",
+                                "maxHeight": "150px",
+                                "overflowY": "auto",
+                                "background": "#f8f9fa",
+                                "fontSize": "12px",
+                            },
+                        ),
+                    ]
+                ),
+            ],
                 id={"cmp": id, "type": "collapse"},
                 is_open=False,
             ),
+
+            # ------------------------------------------------
+            # SELECTED LEAF PATHS BOX
+            # ------------------------------------------------
+            # html.Div(
+            #     [
+            #         html.Div(
+            #             "Checked leaf paths:",
+            #             style={"fontWeight": "bold", "marginTop": "8px"},
+            #         ),
+            #         html.Pre(
+            #             id={"cmp": id, "type": "selected"},
+            #             style={
+            #                 "border": "1px solid #ced4da",
+            #                 "padding": "8px",
+            #                 "marginTop": "4px",
+            #                 "maxHeight": "150px",
+            #                 "overflowY": "auto",
+            #                 "background": "#f8f9fa",
+            #                 "fontSize": "12px",
+            #             },
+            #         ),
+            #     ]
+            # ),
         ]
     )
 
+    # --------------------------------------------------------
+    # TOGGLE DROPDOWN
     # --------------------------------------------------------
     @app.callback(
         Output({"cmp": id, "type": "collapse"}, "is_open"),
@@ -181,6 +197,9 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
     def toggle(_, o):
         return not o
 
+    # --------------------------------------------------------
+    # FOLDER EXPAND / COLLAPSE
+    # --------------------------------------------------------
     @app.callback(
         Output({"cmp": id, "type": "col", "path": MATCH}, "is_open"),
         Output({"cmp": id, "type": "icon", "path": MATCH}, "children"),
@@ -192,48 +211,62 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
     def folder(_, __, o):
         return not o, expanded_icon if not o else collapsed_icon
 
+    # --------------------------------------------------------
+    # REBUILD TREE WHEN PATHS CHANGE
+    # --------------------------------------------------------
     @app.callback(
-        Output({"cmp": id, "type": "display"}, "children"),
+        Output({"cmp": id, "type": "tree"}, "children"),
+        Input({"cmp": id, "type": "paths"}, "data"),
+    )
+    def rebuild_tree(paths):
+        tree = build_tree(paths)
+        return [render_node(n) for n in tree]
+
+    # --------------------------------------------------------
+    # CHECKBOX TOGGLE WITH DOWNWARD CASCADE
+    # --------------------------------------------------------
+    @app.callback(
         Output({"cmp": id, "type": "chk", "path": ALL}, "children"),
-        Output({"cmp": id, "type": "state"}, "data"),
+        Output({"cmp": id, "type": "checked"}, "data"),
         Input({"cmp": id, "type": "chk", "path": ALL}, "n_clicks"),
         State({"cmp": id, "type": "chk", "path": ALL}, "id"),
-        State({"cmp": id, "type": "state"}, "data"),
+        State({"cmp": id, "type": "checked"}, "data"),
+        prevent_initial_call=True,
     )
-    def update(_, ids, state):
-        checked = state.copy()
-        ind = {p: False for p in checked}
+    def toggle_checkbox(_, ids, checked):
+        checked = checked.copy()
 
         ctx = dash.callback_context
-        if ctx.triggered:
-            p = ctx.triggered_id["path"]
-            new = not checked[p]
-            checked[p] = new
-            for d in descendants(p):
-                checked[d] = new
+        if not ctx.triggered:
+            return dash.no_update, checked
 
-        for p in ALL_PATHS:
-            kids = CHILDREN[p]
-            if not kids:
-                continue
-            vals = [checked[k] for k in kids]
-            if all(vals):
-                checked[p] = True
-            elif any(vals):
-                checked[p] = False
-                ind[p] = True
-            else:
-                checked[p] = False
+        clicked = ctx.triggered_id["path"]
+        new_state = not checked.get(clicked, False)
 
-        def sym(p):
-            return "–" if ind[p] else ("✓" if checked[p] else "")
+        prefix = clicked + "/"
+        for i in ids:
+            p = i["path"]
+            if p == clicked or p.startswith(prefix):
+                checked[p] = new_state
 
-        selected = [p for p in ALL_PATHS if checked[p] and not CHILDREN[p]]
+        def symbol(path):
+            return "✓" if checked.get(path, False) else ""
 
-        return (
-            "\n".join(selected),                 # 👈 one per line
-            [sym(i["path"]) for i in ids],
-            checked,
-        )
+        return [symbol(i["path"]) for i in ids], checked
+
+    # --------------------------------------------------------
+    # SHOW CHECKED LEAF PATHS
+    # --------------------------------------------------------
+    @app.callback(
+        Output({"cmp": id, "type": "selected"}, "children"),
+        Input({"cmp": id, "type": "checked"}, "data"),
+        State({"cmp": id, "type": "paths"}, "data"),
+    )
+    def show_checked_leaves(checked, leaf_paths):
+        if not checked:
+            return ""
+
+        selected = [p for p in leaf_paths if checked.get(p, False)]
+        return "\n".join(selected)
 
     return layout
