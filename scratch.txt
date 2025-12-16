@@ -1,0 +1,210 @@
+import json
+import dash
+import dash_bootstrap_components as dbc
+from dash import html, Input, Output, State, MATCH, ALL, dcc
+from dash_iconify import DashIconify
+
+expanded_icon = DashIconify(icon="fa6-regular:folder-open")
+collapsed_icon = DashIconify(icon="fa6-solid:folder-plus")
+
+
+def TreeSelect(app, *, id, paths, button_label="Select files"):
+    # --------------------------------------------------------
+    def build_tree(paths):
+        root = {}
+        for p in paths:
+            cur = root
+            for part in p.split("/"):
+                cur = cur.setdefault(part, {})
+
+        def compress(node):
+            if len(node) != 1:
+                return {k: compress(v) for k, v in node.items()}
+            k = next(iter(node))
+            v = compress(node[k])
+            if len(v) == 1:
+                ck = next(iter(v))
+                return {f"{k}/{ck}": v[ck]}
+            return {k: v}
+
+        compressed = compress(root)
+
+        def to_tree(d, parent=""):
+            out = []
+            for k, v in d.items():
+                path = f"{parent}/{k}" if parent else k
+                out.append({"label": k, "path": path, "children": to_tree(v, path)})
+            return out
+
+        return to_tree(compressed)
+
+    def flatten_tree(nodes):
+        paths, children = [], {}
+
+        def walk(n):
+            paths.append(n["path"])
+            children[n["path"]] = [c["path"] for c in n["children"]]
+            for c in n["children"]:
+                walk(c)
+
+        for n in nodes:
+            walk(n)
+        return paths, children
+
+    def descendants(p, CHILDREN):
+        out, stack = [], CHILDREN[p][:]
+        while stack:
+            x = stack.pop()
+            out.append(x)
+            stack.extend(CHILDREN[x])
+        return out
+
+    def tri_checkbox(path):
+        return html.Span(
+            id={"cmp": id, "type": "chk", "path": path},
+            n_clicks=0,
+            style={
+                "width": "16px",
+                "height": "16px",
+                "border": "1px solid #555",
+                "display": "inline-flex",
+                "alignItems": "center",
+                "justifyContent": "center",
+                "cursor": "pointer",
+                "fontWeight": "bold",
+                "userSelect": "none",
+                "marginRight": "6px",
+            },
+        )
+
+    def render_node(node, level=0):
+        indent = f"{level * 20}px"
+        p = node["path"]
+
+        if not node["children"]:
+            return html.Div(
+                [tri_checkbox(p), html.Span(node["label"])],
+                style={"marginLeft": indent, "display": "flex"},
+            )
+
+        return html.Div(
+            [
+                html.Div(
+                    [
+                        tri_checkbox(p),
+                        html.Span(
+                            collapsed_icon,
+                            id={"cmp": id, "type": "icon", "path": p},
+                            n_clicks=0,
+                            style={"marginRight": "6px", "cursor": "pointer"},
+                        ),
+                        html.Span(
+                            node["label"],
+                            id={"cmp": id, "type": "btn", "path": p},
+                            n_clicks=0,
+                            style={"cursor": "pointer"},
+                        ),
+                    ],
+                    style={"marginLeft": indent, "display": "flex"},
+                ),
+                dbc.Collapse(
+                    [render_node(c, level + 1) for c in node["children"]],
+                    id={"cmp": id, "type": "col", "path": p},
+                    is_open=False,
+                ),
+            ]
+        )
+
+    # --------------------------------------------------------
+    tree = build_tree(paths)
+    ALL_PATHS, CHILDREN = flatten_tree(tree)
+
+    layout = html.Div(
+        [
+            dcc.Store(id={"cmp": id, "type": "state"}, data={p: False for p in ALL_PATHS}),
+            dcc.Store(id={"cmp": id, "type": "selected"}),
+
+            dbc.Button(
+                button_label,
+                id={"cmp": id, "type": "toggle"},
+                outline=True,
+                color="secondary",
+            ),
+
+            dbc.Collapse(
+                html.Div(
+                    [render_node(n) for n in tree],
+                    style={
+                        "border": "1px solid #ced4da",
+                        "padding": "8px",
+                        "maxHeight": "300px",
+                        "overflowY": "auto",
+                        "background": "white",
+                    },
+                ),
+                id={"cmp": id, "type": "collapse"},
+                is_open=False,
+            ),
+        ]
+    )
+
+    # --------------------------------------------------------
+    @app.callback(
+        Output({"cmp": id, "type": "collapse"}, "is_open"),
+        Input({"cmp": id, "type": "toggle"}, "n_clicks"),
+        State({"cmp": id, "type": "collapse"}, "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle(_, o): return not o
+
+    @app.callback(
+        Output({"cmp": id, "type": "col", "path": MATCH}, "is_open"),
+        Output({"cmp": id, "type": "icon", "path": MATCH}, "children"),
+        Input({"cmp": id, "type": "btn", "path": MATCH}, "n_clicks"),
+        Input({"cmp": id, "type": "icon", "path": MATCH}, "n_clicks"),
+        State({"cmp": id, "type": "col", "path": MATCH}, "is_open"),
+        prevent_initial_call=True,
+    )
+    def folder(_, __, o):
+        return not o, expanded_icon if not o else collapsed_icon
+
+    @app.callback(
+        Output({"cmp": id, "type": "selected"}, "data"),
+        Output({"cmp": id, "type": "chk", "path": ALL}, "children"),
+        Output({"cmp": id, "type": "state"}, "data"),
+        Input({"cmp": id, "type": "chk", "path": ALL}, "n_clicks"),
+        State({"cmp": id, "type": "chk", "path": ALL}, "id"),
+        State({"cmp": id, "type": "state"}, "data"),
+    )
+    def update(_, ids, state):
+        checked = state.copy()
+        ind = {p: False for p in checked}
+
+        ctx = dash.callback_context
+        if ctx.triggered:
+            p = ctx.triggered_id["path"]
+            new = not checked[p]
+            checked[p] = new
+            for d in descendants(p, CHILDREN):
+                checked[d] = new
+
+        for p in ALL_PATHS:
+            kids = CHILDREN[p]
+            if not kids:
+                continue
+            vals = [checked[k] for k in kids]
+            if all(vals):
+                checked[p] = True
+            elif any(vals):
+                checked[p] = False
+                ind[p] = True
+            else:
+                checked[p] = False
+
+        def sym(p): return "–" if ind[p] else ("✓" if checked[p] else "")
+
+        selected = [p for p in ALL_PATHS if checked[p] and not CHILDREN[p]]
+        return selected, [sym(i["path"]) for i in ids], checked
+
+    return layout
+
