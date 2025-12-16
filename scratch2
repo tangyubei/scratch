@@ -1,0 +1,28 @@
+from dash import Dash, html, Input, Output
+import dash_bootstrap_components as dbc
+from tree_select.TreeSelect import TreeSelect
+
+app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+
+paths = [
+    "A/B/C/D",
+    "A/B/E/F",
+    "X/Y/Z",
+]
+
+app.layout = html.Div(
+    [
+        TreeSelect(app, id="files", paths=paths),
+        html.Pre(id="out"),
+    ]
+)
+
+@app.callback(
+    Output("out", "children"),
+    Input({"cmp": "files", "type": "selected"}, "data"),
+)
+def show(selected):
+    return selected
+
+if __name__ == "__main__":
+    app.run(debug=True)
