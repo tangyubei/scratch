@@ -122,7 +122,7 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
         [
             dcc.Store(id={"cmp": id, "type": "paths"}, data=paths),
             dcc.Store(id={"cmp": id, "type": "checked"}, data={}),
-            dcc.Store(id={"cmp": id, "type": "roots"}),  # <<< NEW
+            dcc.Store(id={"cmp": id, "type": "roots"}),
 
             dbc.Button(
                 button_label,
@@ -145,6 +145,26 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
                             "background": "white",
                         },
                     ),
+                    html.Div(
+                        [
+                            html.Div(
+                                "Checked leaf paths:",
+                                style={"fontWeight": "bold", "marginTop": "8px"},
+                            ),
+                            html.Pre(
+                                id={"cmp": id, "type": "selected"},
+                                style={
+                                    "border": "1px solid #ced4da",
+                                    "padding": "8px",
+                                    "marginTop": "4px",
+                                    "maxHeight": "150px",
+                                    "overflowY": "auto",
+                                    "background": "#f8f9fa",
+                                    "fontSize": "12px",
+                                },
+                            ),
+                        ]
+                    ),
                 ],
                 id={"cmp": id, "type": "collapse"},
                 is_open=False,
@@ -165,6 +185,20 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
         return not o
 
     # --------------------------------------------------------
+    # FOLDER EXPAND / COLLAPSE
+    # --------------------------------------------------------
+    @app.callback(
+        Output({"cmp": id, "type": "col", "path": MATCH}, "is_open"),
+        Output({"cmp": id, "type": "icon", "path": MATCH}, "children"),
+        Input({"cmp": id, "type": "btn", "path": MATCH}, "n_clicks"),
+        Input({"cmp": id, "type": "icon", "path": MATCH}, "n_clicks"),
+        State({"cmp": id, "type": "col", "path": MATCH}, "is_open"),
+        prevent_initial_call=True,
+    )
+    def folder(_, __, o):
+        return not o, expanded_icon if not o else collapsed_icon
+
+    # --------------------------------------------------------
     # REBUILD TREE + ROOTS WHEN PATHS CHANGE
     # --------------------------------------------------------
     @app.callback(
@@ -178,7 +212,7 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
         return [render_node(n) for n in tree], roots
 
     # --------------------------------------------------------
-    # TRI-STATE CHECKBOX LOGIC (STABLE)
+    # TRI-STATE CHECKBOX LOGIC (ROOT = SELECT ALL)
     # --------------------------------------------------------
     @app.callback(
         Output({"cmp": id, "type": "chk", "path": ALL}, "children"),
@@ -204,19 +238,30 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
             pref = p + "/"
             return [x for x in leaf_paths if x.startswith(pref)]
 
-        def folder_state(p):
+        def is_leaf(p):
+            return p in leaf_paths
+
+        # ---------------- CLICK HANDLING ----------------
+        if is_leaf(clicked):
+            checked[clicked] = not checked.get(clicked, False)
+
+        elif clicked in roots:
+            # ROOT = SELECT ALL
+            for p in leaf_paths:
+                if p.startswith(clicked):
+                    checked[p] = True
+
+        else:
+            # NORMAL FOLDER
+            kids = descendants(clicked)
+            any_checked = any(checked.get(k, False) for k in kids)
+            new_val = not any_checked
+            for k in kids:
+                checked[k] = new_val
+
+        # ---------------- SYMBOL CALC ----------------
+        def symbol(p):
             kids = descendants(p)
-
-            if p in roots:
-                if not kids:
-                    return CHECK
-                vals = [checked.get(k, False) for k in kids]
-                if all(vals):
-                    return CHECK
-                if any(vals):
-                    return INDET
-                return CHECK
-
             if not kids:
                 return CHECK if checked.get(p, False) else EMPTY
 
@@ -225,15 +270,19 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
                 return CHECK
             if any(vals):
                 return INDET
-            return EMPTY
+            return CHECK if p in roots else EMPTY
 
-        if clicked in leaf_paths:
-            checked[clicked] = not checked.get(clicked, False)
-        elif clicked not in roots:
-            new_val = folder_state(clicked) == EMPTY
-            for p in descendants(clicked):
-                checked[p] = new_val
+        return [symbol(i["path"]) for i in ids], checked
 
-        return [folder_state(i["path"]) for i in ids], checked
+    # --------------------------------------------------------
+    # SHOW CHECKED LEAF PATHS
+    # --------------------------------------------------------
+    @app.callback(
+        Output({"cmp": id, "type": "selected"}, "children"),
+        Input({"cmp": id, "type": "checked"}, "data"),
+        State({"cmp": id, "type": "paths"}, "data"),
+    )
+    def show_checked_leaves(checked, leaf_paths):
+        return "\n".join(p for p in leaf_paths if checked.get(p, False))
 
     return layout
