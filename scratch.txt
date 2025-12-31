@@ -1,60 +1,54 @@
-import dash
+from dash import (
+    html, dcc, callback, Input, Output, State,
+    ALL, MATCH, ctx
+)
 import dash_bootstrap_components as dbc
-from dash import html, Input, Output, State, MATCH, ALL, dcc
-from dash_iconify import DashIconify
 
-expanded_icon = DashIconify(icon="fa6-regular:folder-open")
-collapsed_icon = DashIconify(icon="fa6-solid:folder-plus")
-
+# ===============================
+# Symbols
+# ===============================
 CHECK = "✓"
 INDET = "−"
 EMPTY = ""
 
+# ===============================
+# Tree construction (deterministic)
+# ===============================
+def build_tree(paths):
+    root = {}
+    for p in sorted(paths):
+        cur = root
+        for part in p.split("::"):
+            cur = cur.setdefault(part, {})
+    return root
 
-def tree_dropdown(app, *, id, paths, button_label="Select files"):
-    # --------------------------------------------------------
-    # BUILD TREE + COMPRESS SINGLE-CHILD CHAINS
-    # --------------------------------------------------------
-    def build_tree(paths):
-        root = {}
-        for p in paths:
-            cur = root
-            for part in p.split("/"):
-                cur = cur.setdefault(part, {})
 
-        def compress(node):
-            if len(node) != 1:
-                return {k: compress(v) for k, v in node.items()}
-            k = next(iter(node))
-            v = compress(node[k])
-            if len(v) == 1:
-                ck = next(iter(v))
-                return {f"{k}/{ck}": v[ck]}
-            return {k: v}
+def to_nodes(tree, parent=""):
+    out = []
+    for k in sorted(tree.keys()):
+        path = f"{parent}::{k}" if parent else k
+        out.append({
+            "label": k,
+            "path": path,
+            "children": to_nodes(tree[k], path)
+        })
+    return out
 
-        def to_tree(d, parent=""):
-            out = []
-            for k, v in d.items():
-                path = f"{parent}/{k}" if parent else k
-                out.append(
-                    {
-                        "label": k,
-                        "path": path,
-                        "children": to_tree(v, path),
-                    }
-                )
-            return out
 
-        return to_tree(compress(root))
+# ===============================
+# Component
+# ===============================
+def tree_dropdown(id, paths, button_label="Filter Books"):
 
-    # --------------------------------------------------------
-    # CHECKBOX
-    # --------------------------------------------------------
-    def tri_checkbox(path):
+    tree = to_nodes(build_tree(paths))
+    leaf_paths = set(paths)
+
+    # ---------- helpers ----------
+    def checkbox(path):
         return html.Span(
             id={"cmp": id, "type": "chk", "path": path},
             n_clicks=0,
-            children="",
+            children=EMPTY,
             style={
                 "width": "16px",
                 "height": "16px",
@@ -69,205 +63,151 @@ def tree_dropdown(app, *, id, paths, button_label="Select files"):
             },
         )
 
-    # --------------------------------------------------------
-    # RENDER NODE
-    # --------------------------------------------------------
     def render_node(node, level=0):
-        indent = f"{level * 20}px"
         p = node["path"]
+        indent = level * 18
+
+        row = html.Div(
+            [
+                checkbox(p),
+                html.Span(node["label"]),
+            ],
+            style={"marginLeft": f"{indent}px", "display": "flex"},
+        )
 
         if not node["children"]:
-            return html.Div(
-                [tri_checkbox(p), html.Span(node["label"])],
-                style={"marginLeft": indent, "display": "flex"},
-            )
+            return row
 
         return html.Div(
             [
+                row,
                 html.Div(
-                    [
-                        tri_checkbox(p),
-                        html.Span(
-                            collapsed_icon,
-                            id={"cmp": id, "type": "icon", "path": p},
-                            n_clicks=0,
-                            style={"marginRight": "6px", "cursor": "pointer"},
-                        ),
-                        html.Span(
-                            node["label"],
-                            id={"cmp": id, "type": "btn", "path": p},
-                            n_clicks=0,
-                            style={"cursor": "pointer"},
-                        ),
-                    ],
-                    style={"marginLeft": indent, "display": "flex"},
-                ),
-                dbc.Collapse(
                     [render_node(c, level + 1) for c in node["children"]],
-                    id={"cmp": id, "type": "col", "path": p},
-                    is_open=False,
+                    id={"cmp": id, "type": "children", "path": p},
                 ),
             ]
         )
 
-    # --------------------------------------------------------
-    # INITIAL TREE
-    # --------------------------------------------------------
-    tree = build_tree(paths)
-
     layout = html.Div(
         [
-            dcc.Store(id={"cmp": id, "type": "paths"}, data=paths),
+            # ---------- stores ----------
             dcc.Store(id={"cmp": id, "type": "checked"}, data={}),
+            dcc.Store(id={"cmp": id, "type": "paths"}, data=paths),
+            dcc.Store(id={"cmp": id, "type": "leafs"}, data=list(leaf_paths)),
 
+            # ---------- toggle ----------
             dbc.Button(
                 button_label,
                 id={"cmp": id, "type": "toggle"},
-                outline=True,
                 color="secondary",
-                className="mb-2",
+                size="sm",
             ),
 
             dbc.Collapse(
-                [
-                    html.Div(
-                        [render_node(n) for n in tree],
-                        id={"cmp": id, "type": "tree"},
-                        style={
-                            "border": "1px solid #ced4da",
-                            "padding": "8px",
-                            "maxHeight": "250px",
-                            "overflowY": "auto",
-                            "background": "white",
-                        },
-                    ),
-                    html.Div(
-                        [
-                            html.Div(
-                                "Checked leaf paths:",
-                                style={"fontWeight": "bold", "marginTop": "8px"},
-                            ),
-                            html.Pre(
-                                id={"cmp": id, "type": "selected"},
-                                style={
-                                    "border": "1px solid #ced4da",
-                                    "padding": "8px",
-                                    "marginTop": "4px",
-                                    "maxHeight": "150px",
-                                    "overflowY": "auto",
-                                    "background": "#f8f9fa",
-                                    "fontSize": "12px",
-                                },
-                            ),
-                        ]
-                    ),
-                ],
+                html.Div(
+                    [render_node(n) for n in tree],
+                    id={"cmp": id, "type": "tree"},
+                    style={
+                        "border": "1px solid #ccc",
+                        "padding": "6px",
+                        "marginTop": "6px",
+                        "maxHeight": "260px",
+                        "overflowY": "auto",
+                        "background": "white",
+                    },
+                ),
                 id={"cmp": id, "type": "collapse"},
                 is_open=False,
+            ),
+
+            html.Pre(
+                id={"cmp": id, "type": "selected"},
+                style={
+                    "marginTop": "8px",
+                    "fontSize": "12px",
+                    "background": "#fafafa",
+                    "padding": "6px",
+                },
             ),
         ]
     )
 
-    # --------------------------------------------------------
-    # TOGGLE DROPDOWN
-    # --------------------------------------------------------
-    @app.callback(
+    # ===============================
+    # Collapse toggle
+    # ===============================
+    @callback(
         Output({"cmp": id, "type": "collapse"}, "is_open"),
         Input({"cmp": id, "type": "toggle"}, "n_clicks"),
         State({"cmp": id, "type": "collapse"}, "is_open"),
         prevent_initial_call=True,
     )
-    def toggle(_, o):
-        return not o
+    def toggle(_, open_):
+        return not open_
 
-    # --------------------------------------------------------
-    # FOLDER EXPAND / COLLAPSE
-    # --------------------------------------------------------
-    @app.callback(
-        Output({"cmp": id, "type": "col", "path": MATCH}, "is_open"),
-        Output({"cmp": id, "type": "icon", "path": MATCH}, "children"),
-        Input({"cmp": id, "type": "btn", "path": MATCH}, "n_clicks"),
-        Input({"cmp": id, "type": "icon", "path": MATCH}, "n_clicks"),
-        State({"cmp": id, "type": "col", "path": MATCH}, "is_open"),
-        prevent_initial_call=True,
-    )
-    def folder(_, __, o):
-        return not o, expanded_icon if not o else collapsed_icon
-
-    # --------------------------------------------------------
-    # REBUILD TREE WHEN PATHS CHANGE
-    # --------------------------------------------------------
-    @app.callback(
-        Output({"cmp": id, "type": "tree"}, "children"),
-        Input({"cmp": id, "type": "paths"}, "data"),
-    )
-    def rebuild_tree(paths):
-        tree = build_tree(paths)
-        return [render_node(n) for n in tree]
-
-    # --------------------------------------------------------
-    # TRI-STATE CHECKBOX LOGIC
-    # --------------------------------------------------------
-    @app.callback(
+    # ===============================
+    # Tri-state logic (SAFE)
+    # ===============================
+    @callback(
         Output({"cmp": id, "type": "chk", "path": ALL}, "children"),
         Output({"cmp": id, "type": "checked"}, "data"),
         Input({"cmp": id, "type": "chk", "path": ALL}, "n_clicks"),
         State({"cmp": id, "type": "chk", "path": ALL}, "id"),
         State({"cmp": id, "type": "checked"}, "data"),
-        State({"cmp": id, "type": "paths"}, "data"),
+        State({"cmp": id, "type": "leafs"}, "data"),
         prevent_initial_call=True,
     )
-    def toggle_checkbox(_, ids, checked, leaf_paths):
-        checked = checked.copy()
+    def toggle_check(_, ids, checked, leafs):
 
-        ctx = dash.callback_context
-        if not ctx.triggered:
-            return dash.no_update, checked
+        checked = dict(checked or {})
+        ids = ids or []
 
-        clicked = ctx.triggered_id["path"]
+        trigger = ctx.triggered_id
+        clicked = trigger.get("path") if isinstance(trigger, dict) else None
 
+        # ---------- helpers ----------
         def descendants(p):
-            pref = p + "/"
-            return [x for x in leaf_paths if x.startswith(pref)]
+            pref = p + "::"
+            return [x for x in leafs if x.startswith(pref)]
 
-        def folder_state(p):
-            kids = descendants(p)
-            if not kids:
+        def state(p):
+            if p in leafs:
                 return CHECK if checked.get(p, False) else EMPTY
-
+            kids = descendants(p)
             vals = [checked.get(k, False) for k in kids]
-            if all(vals):
+            if vals and all(vals):
                 return CHECK
             if any(vals):
                 return INDET
             return EMPTY
 
-        # handle click
-        if clicked in leaf_paths:
+        # ---------- no click ----------
+        if clicked is None:
+            return [state(i["path"]) for i in ids], checked
+
+        # ---------- leaf ----------
+        if clicked in leafs:
             checked[clicked] = not checked.get(clicked, False)
+
+        # ---------- folder ----------
         else:
-            cur = folder_state(clicked)
-            new_val = cur == EMPTY
-            for p in descendants(clicked):
-                checked[p] = new_val
+            kids = descendants(clicked)
+            new_val = state(clicked) != CHECK
+            for k in kids:
+                checked[k] = new_val
 
-        def symbol(p):
-            if p in leaf_paths:
-                return CHECK if checked.get(p, False) else EMPTY
-            return folder_state(p)
+        return [state(i["path"]) for i in ids], checked
 
-        return [symbol(i["path"]) for i in ids], checked
-
-    # --------------------------------------------------------
-    # SHOW CHECKED LEAF PATHS
-    # --------------------------------------------------------
-    @app.callback(
+    # ===============================
+    # Show selected leaves
+    # ===============================
+    @callback(
         Output({"cmp": id, "type": "selected"}, "children"),
         Input({"cmp": id, "type": "checked"}, "data"),
-        State({"cmp": id, "type": "paths"}, "data"),
+        State({"cmp": id, "type": "leafs"}, "data"),
     )
-    def show_checked_leaves(checked, leaf_paths):
-        selected = [p for p in leaf_paths if checked.get(p, False)]
-        return "\n".join(selected)
+    def show_selected(checked, leafs):
+        checked = checked or {}
+        sel = [p for p in leafs if checked.get(p)]
+        return "\n".join(sel)
 
     return layout
